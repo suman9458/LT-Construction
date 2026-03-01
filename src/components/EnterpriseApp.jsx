@@ -595,6 +595,7 @@ export default function EnterpriseApp({ session, onLogout }) {
     profileRole: session.role || defaultState.profileRole || "Engineer"
   }));
   const [notifOpen, setNotifOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const appliedProject = state.appliedProject || state.project;
   const appliedBoq = state.appliedBoq || state.boq;
 
@@ -740,6 +741,7 @@ export default function EnterpriseApp({ session, onLogout }) {
 
   function setPage(page) {
     setState((prev) => ({ ...prev, page }));
+    setMobileNavOpen(false);
   }
 
   function updateProject(key, value) {
@@ -933,6 +935,32 @@ export default function EnterpriseApp({ session, onLogout }) {
       </aside>
 
       <div className={`workspace ${state.page === "dashboard" && notifOpen ? "notif-open" : ""}`}>
+        <div className="mobile-nav glass">
+          <button
+            type="button"
+            className="mobile-nav-toggle"
+            aria-label="Open page menu"
+            onClick={() => setMobileNavOpen((prev) => !prev)}
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
+          <strong>{navItems.find((item) => item.id === state.page)?.label || t.dashboard}</strong>
+          {mobileNavOpen ? (
+            <div className="mobile-nav-menu">
+              {navItems.map((item) => (
+                <button
+                  key={`mobile-${item.id}`}
+                  type="button"
+                  className={state.page === item.id ? "active" : ""}
+                  onClick={() => setPage(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
         {state.page === "dashboard" ? (
           <header className="top-head glass">
             <div>
