@@ -1,6 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import companyLogo from "../assets/logo.png";
 
+const THEME_STORAGE_KEY = "lt-construction-theme";
+const PAGE_STORAGE_KEY = "lt-construction-page";
+
+const VALID_PAGE_IDS = new Set(["dashboard", "setup", "analytics", "health"]);
+
+function resolveInitialTheme() {
+  try {
+    if (typeof window === "undefined") {
+      return defaultState.theme;
+    }
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return savedTheme === "light" || savedTheme === "dark" ? savedTheme : defaultState.theme;
+  } catch {
+    return defaultState.theme;
+  }
+}
+
+function resolveInitialPage() {
+  try {
+    if (typeof window === "undefined") {
+      return defaultState.page;
+    }
+    const savedPage = window.localStorage.getItem(PAGE_STORAGE_KEY);
+    return VALID_PAGE_IDS.has(savedPage) ? savedPage : defaultState.page;
+  } catch {
+    return defaultState.page;
+  }
+}
+
 const text = {
   en: {
     dashboard: "Dashboard",
@@ -592,12 +621,30 @@ export default function EnterpriseApp({ session, onLogout }) {
       yellow: [...defaultState.panelGroups.yellow],
       red: [...defaultState.panelGroups.red]
     },
-    profileRole: session.role || defaultState.profileRole || "Engineer"
+    profileRole: session.role || defaultState.profileRole || "Engineer",
+    page: resolveInitialPage(),
+    theme: resolveInitialTheme()
   }));
   const [notifOpen, setNotifOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const appliedProject = state.appliedProject || state.project;
   const appliedBoq = state.appliedBoq || state.boq;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, state.theme);
+    } catch {
+      // Ignore storage write errors in restricted environments.
+    }
+  }, [state.theme]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PAGE_STORAGE_KEY, state.page);
+    } catch {
+      // Ignore storage write errors in restricted environments.
+    }
+  }, [state.page]);
 
   useEffect(() => {
     if (!state.exportCelebration) {
