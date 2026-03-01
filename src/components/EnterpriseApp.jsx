@@ -374,6 +374,12 @@ function formatINRForPdf(value) {
   return `INR ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value)}`;
 }
 
+function formatTons(value) {
+  const safeValue = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const fixed = Number(safeValue).toFixed(1);
+  return `${fixed} ton${Number(fixed) === 1 ? "" : "s"} of CO2`;
+}
+
 function asNumber(value, min = 0) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -658,8 +664,11 @@ export default function EnterpriseApp({ session, onLogout }) {
     const activeScenario = appliedBoq.mode === "optimized" ? optimizedScenario : manualScenario;
 
     const savings = Math.max(0, manualScenario.totalCost - optimizedScenario.totalCost);
-    const co2 = Math.max(1, Math.round(savings / 100000));
-    const treeEq = co2 * 45;
+    const co2FromSavings = savings / 100000;
+    const co2Adjustment = standardization * 0.04 - wastage * 0.06;
+    const co2Raw = Math.max(0, co2FromSavings + co2Adjustment);
+    const co2 = savings > 0 ? Math.max(0.1, Number(co2Raw.toFixed(1))) : 0;
+    const treeEq = Math.max(1, Math.round(co2 * 45));
 
     return {
       quantities: activeScenario.quantities,
@@ -689,16 +698,45 @@ export default function EnterpriseApp({ session, onLogout }) {
   }, [logistics.distance, appliedBoq.cycleDays]);
 
   const metrics = useMemo(() => {
-    const utilization = Math.min(97, Math.round((appliedProject.targetReuse / 25) * 100));
-    const logisticsScore = Math.max(72, 94 - logistics.distance / 2);
+    const reuse = asNumber(appliedProject.targetReuse, 0);
+    const cycleDays = asNumber(appliedBoq.cycleDays, 0);
+    const standardization = asNumber(appliedBoq.standardization, 0);
+    const wastage = asNumber(appliedBoq.wastage, 0);
+    const slabArea = asNumber(appliedBoq.slabArea, 0);
+    const floorCount = asNumber(appliedBoq.floorCount, 0);
+    const isZeroScope = slabArea <= 0 || floorCount <= 0;
+    const slabScale = Math.min(1, slabArea / 50000);
+    const floorScale = Math.min(1, floorCount / 60);
+    const utilizationRaw =
+      18 +
+      reuse * 1.8 +
+      standardization * 0.35 +
+      slabScale * 18 +
+      floorScale * 12 -
+      cycleDays * 0.5 -
+      wastage * 0.7;
+    const utilization = isZeroScope ? 0 : Math.max(0, Math.min(97, Math.round(utilizationRaw)));
+    const logisticsRaw = 92 - logistics.distance * 0.45 - cycleDays * 1.3 - wastage * 0.35 + standardization * 0.28 + reuse * 0.35;
+    const logisticsScore = isZeroScope ? 0 : Math.max(45, Math.min(99, logisticsRaw));
     return {
       totalCost: formatINR(boq.totalCost),
       costSaved: formatINR(boq.savings),
-      co2: `${boq.co2} metric tons of CO2`,
+      co2: formatTons(boq.co2),
       utilization: `${utilization}%`,
       logistics: `${logisticsScore.toFixed(1)}%`
     };
-  }, [boq.totalCost, boq.savings, boq.co2, logistics.distance, appliedProject.targetReuse]);
+  }, [
+    boq.totalCost,
+    boq.savings,
+    boq.co2,
+    logistics.distance,
+    appliedProject.targetReuse,
+    appliedBoq.slabArea,
+    appliedBoq.floorCount,
+    appliedBoq.cycleDays,
+    appliedBoq.standardization,
+    appliedBoq.wastage
+  ]);
 
   function setPage(page) {
     setState((prev) => ({ ...prev, page }));
@@ -718,6 +756,27 @@ export default function EnterpriseApp({ session, onLogout }) {
       appliedProject: { ...prev.project, locked: false },
       appliedBoq: { ...prev.boq },
       project: { ...prev.project, locked: true }
+    }));
+  }
+
+  function clearConfigInputs() {
+    setState((prev) => ({
+      ...prev,
+      project: {
+        ...prev.project,
+        floors: 0,
+        areaPerFloor: 0,
+        targetReuse: 0,
+        locked: false
+      },
+      boq: {
+        ...prev.boq,
+        slabArea: 0,
+        floorCount: 0,
+        cycleDays: 0,
+        standardization: 0,
+        wastage: 0
+      }
     }));
   }
 
@@ -946,7 +1005,15 @@ export default function EnterpriseApp({ session, onLogout }) {
           ) : null}
 
           {state.page === "setup" ? (
-            <ProjectSetupPage state={state} onProjectChange={updateProject} onBoqChange={updateBoq} onBlueprintUpload={onBlueprintUpload} lockConfig={applyConfig} t={t} />
+            <ProjectSetupPage
+              state={state}
+              onProjectChange={updateProject}
+              onBoqChange={updateBoq}
+              onBlueprintUpload={onBlueprintUpload}
+              lockConfig={applyConfig}
+              clearInputs={clearConfigInputs}
+              t={t}
+            />
           ) : null}
 
           {state.page === "analytics" ? (
@@ -1013,7 +1080,7 @@ function DashboardPage({ session, state, logistics, logisticsCosts, onVoiceChang
   );
 }
 
-function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUpload, lockConfig, t }) {
+function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUpload, lockConfig, clearInputs, t }) {
   const appliedProject = state.appliedProject || state.project;
   const appliedBoq = state.appliedBoq || state.boq;
   const slabArea = asNumber(appliedBoq.slabArea, 0);
@@ -1099,7 +1166,10 @@ function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUplo
           {t.wastageAllowance}
           <input type="number" min="0" max="40" value={state.boq.wastage} onFocus={selectIfZero} onChange={(e) => onBoqChange("wastage", normalizeNumber(e))} />
         </label>
-        <button type="button" className="save-config-btn" onClick={lockConfig}>{t.save}</button>
+        <div className="inline-form config-actions">
+          <button type="button" className="save-config-btn" onClick={lockConfig}>{t.save}</button>
+          <button type="button" className="clear-config-btn" onClick={clearInputs}>Clear Input</button>
+        </div>
         {state.project.locked ? <small className="ok">{t.configLocked}</small> : null}
       </article>
 
@@ -1234,7 +1304,7 @@ function AnalyticsPage({ boq, logistics, state, setWorkOrderMessage, t }) {
         <h3>{t.predictiveMetrics}</h3>
         <p>{t.costSavings}: {formatINR(boq.savings)}</p>
         <p>{t.kitUnits}: {Math.round(boq.quantities.panel * 0.11)}</p>
-        <p>CO2 Reduction: {boq.co2} metric tons of CO2</p>
+        <p>CO2 Reduction: {formatTons(boq.co2)}</p>
         <p>{t.treeEquivalency}: {boq.treeEq} trees</p>
       </article>
 
