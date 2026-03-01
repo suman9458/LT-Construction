@@ -25,11 +25,11 @@ function formatINR(value) {
 
 export default function MainDashboard({ session, onLogout }) {
   const [inputs, setInputs] = useState({
-    slabArea: 2500,
-    floorCount: 12,
-    cycleDays: 7,
-    standardization: 68,
-    wastage: 6
+    slabArea: 0,
+    floorCount: 0,
+    cycleDays: 0,
+    standardization: 0,
+    wastage: 0
   });
 
   const [mode, setMode] = useState("optimized");
@@ -94,7 +94,7 @@ export default function MainDashboard({ session, onLogout }) {
   }, [inputs, mode]);
 
   function updateField(key, value) {
-    setInputs((prev) => ({ ...prev, [key]: value }));
+    setInputs((prev) => ({ ...prev, [key]: parseNum(value) }));
   }
 
   function handleCardMove(event) {

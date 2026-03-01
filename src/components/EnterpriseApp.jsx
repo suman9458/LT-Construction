@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import companyLogo from "../assets/logo.png";
 
-const APP_STATE_KEY = "createch_enterprise_state";
-
 const text = {
   en: {
     dashboard: "Dashboard",
@@ -286,18 +284,34 @@ const defaultState = {
   sidebarCollapsed: false,
   project: {
     site: "Mumbai",
-    floors: 12,
-    areaPerFloor: 2500,
-    targetReuse: 14,
+    floors: 0,
+    areaPerFloor: 0,
+    targetReuse: 0,
     locked: false,
     blueprintName: ""
   },
   boq: {
-    slabArea: 2500,
-    floorCount: 12,
-    cycleDays: 7,
-    standardization: 68,
-    wastage: 6,
+    slabArea: 0,
+    floorCount: 0,
+    cycleDays: 0,
+    standardization: 0,
+    wastage: 0,
+    mode: "optimized"
+  },
+  appliedProject: {
+    site: "Mumbai",
+    floors: 0,
+    areaPerFloor: 0,
+    targetReuse: 0,
+    locked: false,
+    blueprintName: ""
+  },
+  appliedBoq: {
+    slabArea: 0,
+    floorCount: 0,
+    cycleDays: 0,
+    standardization: 0,
+    wastage: 0,
     mode: "optimized"
   },
   panelGroups: {
@@ -317,21 +331,16 @@ const logisticsDb = {
   Ranchi: { warehouse: "Namkum Stockpoint", distance: 14, transfer: "Transfer 95 beams from Jamshedpur" }
 };
 
-function readState() {
-  try {
-    const raw = localStorage.getItem(APP_STATE_KEY);
-    return raw ? { ...defaultState, ...JSON.parse(raw) } : defaultState;
-  } catch {
-    return defaultState;
-  }
-}
-
 function formatINR(value) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatINRForPdf(value) {
+  return `INR ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(value)}`;
 }
 
 function asNumber(value, min = 0) {
@@ -355,17 +364,111 @@ function triggerDownload(filename, content, mimeType) {
   URL.revokeObjectURL(url);
 }
 
-function downloadSimplePdf(filename, lines) {
+function downloadExecutivePdf(filename, report) {
   const encoder = new TextEncoder();
   const escapeText = (text) => String(text).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  const commands = [];
+  const page = { width: 595, height: 842, left: 44, right: 44, top: 800 };
+  const contentWidth = page.width - page.left - page.right;
 
-  const streamBody = lines
-    .slice(0, 40)
-    .map((line, index) => {
-      const y = 800 - index * 18;
-      return `BT /F1 12 Tf 50 ${y} Td (${escapeText(line)}) Tj ET`;
-    })
-    .join("\n");
+  function writeText(x, y, text, size = 11) {
+    commands.push(`BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escapeText(text)}) Tj ET`);
+  }
+
+  function drawLine(x1, y1, x2, y2) {
+    commands.push(`${x1} ${y1} m ${x2} ${y2} l S`);
+  }
+
+  function drawRect(x, y, w, h) {
+    commands.push(`${x} ${y} ${w} ${h} re S`);
+  }
+
+  function drawTable(startX, startY, colWidths, headers, rows, rowHeight = 18) {
+    const tableWidth = colWidths.reduce((sum, width) => sum + width, 0);
+    const rowCount = rows.length + 1;
+    const tableHeight = rowCount * rowHeight;
+    const bottomY = startY - tableHeight;
+    drawRect(startX, bottomY, tableWidth, tableHeight);
+
+    let x = startX;
+    for (let i = 0; i < colWidths.length - 1; i += 1) {
+      x += colWidths[i];
+      drawLine(x, startY, x, bottomY);
+    }
+
+    for (let i = 1; i < rowCount; i += 1) {
+      const y = startY - i * rowHeight;
+      drawLine(startX, y, startX + tableWidth, y);
+    }
+
+    headers.forEach((header, index) => {
+      writeText(startX + colWidths.slice(0, index).reduce((sum, width) => sum + width, 0) + 6, startY - 13, header, 10);
+    });
+
+    rows.forEach((row, rowIndex) => {
+      row.forEach((cell, colIndex) => {
+        writeText(
+          startX + colWidths.slice(0, colIndex).reduce((sum, width) => sum + width, 0) + 6,
+          startY - (rowIndex + 2) * rowHeight + 5,
+          String(cell),
+          10
+        );
+      });
+    });
+
+    return bottomY - 18;
+  }
+
+  let y = page.top;
+  writeText(page.left, y, "L&T Construction - Executive BoQ Export", 18);
+  y -= 24;
+  writeText(page.left, y, `Generated: ${report.generatedAt}`, 11);
+  y -= 18;
+  writeText(page.left, y, `Report ID: ${report.reportId}`, 11);
+
+  y -= 30;
+  writeText(page.left, y, "Project Summary", 13);
+  y -= 10;
+  y = drawTable(
+    page.left,
+    y,
+    [200, contentWidth - 200],
+    ["Metric", "Value"],
+    [
+      ["Site", report.site],
+      ["Floors", report.floors],
+      ["Slab Area", `${report.slabArea} sq m`],
+      ["Cycle Time", `${report.cycleTime} days`]
+    ]
+  );
+
+  writeText(page.left, y, "BoQ Totals", 13);
+  y -= 10;
+  y = drawTable(
+    page.left,
+    y,
+    [240, contentWidth - 240],
+    ["Metric", "Amount"],
+    [
+      ["Manual Total", report.manualTotal],
+      ["AI Optimized Total", report.aiTotal],
+      ["Savings", report.savings]
+    ]
+  );
+
+  writeText(page.left, y, "Quantities and Cost Detail", 13);
+  y -= 10;
+  y = drawTable(
+    page.left,
+    y,
+    [130, 90, 110, contentWidth - 330],
+    ["Component", "Quantity", "Rate", "Amount"],
+    report.quantities.map((item) => [item.name, item.quantity, item.rate, item.amount])
+  );
+
+  writeText(page.left, Math.max(36, y), "Generated by L&T Construction Analytics", 9);
+
+  const streamBody = commands.join("\n");
 
   const objects = [
     "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
@@ -406,16 +509,57 @@ function downloadCsv(filename, rows) {
   triggerDownload(filename, csv, "text/csv;charset=utf-8;");
 }
 
-export default function EnterpriseApp({ session, onLogout }) {
-  const [state, setState] = useState(() => {
-    const saved = readState();
-    return { ...saved, profileRole: saved.profileRole || session.role || "Engineer" };
-  });
-  const [notifOpen, setNotifOpen] = useState(false);
+function downloadStyledExcel(filename, payload) {
+  const rowsHtml = payload.rows
+    .map((row) => {
+      const tag = row.type === "header" ? "th" : "td";
+      const cls = row.className ? ` class="${row.className}"` : "";
+      const cells = row.cells.map((cell) => `<${tag}>${String(cell)}</${tag}>`).join("");
+      return `<tr${cls}>${cells}</tr>`;
+    })
+    .join("");
 
-  useEffect(() => {
-    localStorage.setItem(APP_STATE_KEY, JSON.stringify(state));
-  }, [state]);
+  const html = `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Calibri, Arial, sans-serif; }
+          table { border-collapse: collapse; width: 100%; }
+          th, td { border: 1px solid #1f2f3b; padding: 6px 8px; font-size: 12pt; text-align: left; }
+          .title td { background: #d9eef9; font-size: 14pt; font-weight: 700; }
+          .section td { background: #edf5fb; font-weight: 700; }
+          .empty td { border: 0; height: 8px; background: #ffffff; }
+          .meta td:first-child { font-weight: 700; width: 220px; }
+          .numeric { text-align: right; }
+        </style>
+      </head>
+      <body>
+        <table>${rowsHtml}</table>
+      </body>
+    </html>
+  `;
+
+  triggerDownload(filename, html, "application/vnd.ms-excel;charset=utf-8;");
+}
+
+export default function EnterpriseApp({ session, onLogout }) {
+  const [state, setState] = useState(() => ({
+    ...defaultState,
+    project: { ...defaultState.project },
+    boq: { ...defaultState.boq },
+    appliedProject: { ...defaultState.appliedProject },
+    appliedBoq: { ...defaultState.appliedBoq },
+    panelGroups: {
+      green: [...defaultState.panelGroups.green],
+      yellow: [...defaultState.panelGroups.yellow],
+      red: [...defaultState.panelGroups.red]
+    },
+    profileRole: session.role || defaultState.profileRole || "Engineer"
+  }));
+  const [notifOpen, setNotifOpen] = useState(false);
+  const appliedProject = state.appliedProject || state.project;
+  const appliedBoq = state.appliedBoq || state.boq;
 
   useEffect(() => {
     if (!state.exportCelebration) {
@@ -440,7 +584,7 @@ export default function EnterpriseApp({ session, onLogout }) {
 
   const notifications = useMemo(() => {
     const fatigue = state.panelGroups.red.length > 0;
-    const delayWarning = asNumber(state.boq.cycleDays, 1) > 8;
+    const delayWarning = asNumber(appliedBoq.cycleDays, 0) > 8;
     return [
       { kind: fatigue ? "critical" : "ok", title: fatigue ? "Inventory fatigue detected" : "Inventory healthy" },
       {
@@ -449,14 +593,14 @@ export default function EnterpriseApp({ session, onLogout }) {
       },
       { kind: "ok", title: "AI optimization run completed successfully" }
     ];
-  }, [state.panelGroups.red.length, state.boq.cycleDays]);
+  }, [state.panelGroups.red.length, appliedBoq.cycleDays]);
 
   const boq = useMemo(() => {
-    const slabArea = asNumber(state.boq.slabArea, 100);
-    const floors = asNumber(state.boq.floorCount, 1);
-    const cycleDays = asNumber(state.boq.cycleDays, 1);
-    const standardization = Math.min(asNumber(state.boq.standardization, 0), 100);
-    const wastage = Math.min(asNumber(state.boq.wastage, 0), 40);
+    const slabArea = asNumber(appliedBoq.slabArea, 0);
+    const floors = asNumber(appliedBoq.floorCount, 0);
+    const cycleDays = asNumber(appliedBoq.cycleDays, 0);
+    const standardization = Math.min(asNumber(appliedBoq.standardization, 0), 100);
+    const wastage = Math.min(asNumber(appliedBoq.wastage, 0), 40);
 
     const repetitionFactor = 1 + (100 - standardization) / 100;
     const safetyFactor = 1 + wastage / 100;
@@ -480,7 +624,7 @@ export default function EnterpriseApp({ session, onLogout }) {
 
     const manualScenario = scenario(1);
     const optimizedScenario = scenario(0.84);
-    const activeScenario = state.boq.mode === "optimized" ? optimizedScenario : manualScenario;
+    const activeScenario = appliedBoq.mode === "optimized" ? optimizedScenario : manualScenario;
 
     const savings = Math.max(0, manualScenario.totalCost - optimizedScenario.totalCost);
     const co2 = Math.max(1, Math.round(savings / 100000));
@@ -498,38 +642,48 @@ export default function EnterpriseApp({ session, onLogout }) {
       co2,
       treeEq
     };
-  }, [state.boq]);
+  }, [appliedBoq]);
 
-  const logistics = logisticsDb[state.project.site];
+  const logistics = logisticsDb[appliedProject.site];
 
   const logisticsCosts = useMemo(() => {
     const transport = Math.round(logistics.distance * 1800);
     const fuel = Math.round(logistics.distance * 640);
-    const delayPenalty = asNumber(state.boq.cycleDays, 1) > 8 ? 125000 : 40000;
+    const delayPenalty = asNumber(appliedBoq.cycleDays, 0) > 8 ? 125000 : 40000;
     return { transport, fuel, delayPenalty, total: transport + fuel + delayPenalty };
-  }, [logistics.distance, state.boq.cycleDays]);
+  }, [logistics.distance, appliedBoq.cycleDays]);
 
   const metrics = useMemo(() => {
-    const utilization = Math.min(97, Math.round((state.project.targetReuse / 25) * 100));
+    const utilization = Math.min(97, Math.round((appliedProject.targetReuse / 25) * 100));
     const logisticsScore = Math.max(72, 94 - logistics.distance / 2);
     return {
+      totalCost: formatINR(boq.totalCost),
       costSaved: formatINR(boq.savings),
-      co2: `${boq.co2} tCO2`,
+      co2: `${boq.co2} metric tons of CO2`,
       utilization: `${utilization}%`,
       logistics: `${logisticsScore.toFixed(1)}%`
     };
-  }, [boq.savings, boq.co2, logistics.distance, state.project.targetReuse]);
+  }, [boq.totalCost, boq.savings, boq.co2, logistics.distance, appliedProject.targetReuse]);
 
   function setPage(page) {
     setState((prev) => ({ ...prev, page }));
   }
 
   function updateProject(key, value) {
-    setState((prev) => ({ ...prev, project: { ...prev.project, [key]: value } }));
+    setState((prev) => ({ ...prev, project: { ...prev.project, [key]: value, locked: false } }));
   }
 
   function updateBoq(key, value) {
-    setState((prev) => ({ ...prev, boq: { ...prev.boq, [key]: value } }));
+    setState((prev) => ({ ...prev, boq: { ...prev.boq, [key]: value }, project: { ...prev.project, locked: false } }));
+  }
+
+  function applyConfig() {
+    setState((prev) => ({
+      ...prev,
+      appliedProject: { ...prev.project, locked: false },
+      appliedBoq: { ...prev.boq },
+      project: { ...prev.project, locked: true }
+    }));
   }
 
   function setWorkOrderMessage(message) {
@@ -559,7 +713,7 @@ export default function EnterpriseApp({ session, onLogout }) {
 
     setState((prev) => ({
       ...prev,
-      project: { ...prev.project, blueprintName: file.name },
+      project: { ...prev.project, blueprintName: file.name, locked: false },
       boq: {
         ...prev.boq,
         slabArea: prev.boq.slabArea + 220,
@@ -587,53 +741,80 @@ export default function EnterpriseApp({ session, onLogout }) {
   }
 
   function exportBoqPdf() {
-    const lines = [
-      "L&T Construction - Executive BoQ Export",
-      `Generated: ${new Date().toLocaleString()}`,
-      "",
-      `Site: ${state.project.site}`,
-      `Floors: ${state.boq.floorCount}`,
-      `Slab Area: ${state.boq.slabArea} sq m`,
-      `Cycle Time: ${state.boq.cycleDays} days`,
-      "",
-      "BoQ Totals",
-      `Manual Total: ${formatINR(boq.manualTotal)}`,
-      `AI Optimized Total: ${formatINR(boq.optimizedTotal)}`,
-      `Savings: ${formatINR(boq.savings)}`,
-      "",
-      "Quantities",
-      `Panel: ${boq.quantities.panel}`,
-      `Beam: ${boq.quantities.beam}`,
-      `Prop: ${boq.quantities.prop}`,
-      `Deck: ${boq.quantities.deck}`
-    ];
+    const pdfReport = {
+      reportId: `BOQ-${Date.now()}`,
+      generatedAt: new Date().toLocaleString(),
+      site: appliedProject.site,
+      floors: appliedBoq.floorCount,
+      slabArea: appliedBoq.slabArea,
+      cycleTime: appliedBoq.cycleDays,
+      manualTotal: formatINRForPdf(boq.manualTotal),
+      aiTotal: formatINRForPdf(boq.optimizedTotal),
+      savings: formatINRForPdf(boq.savings),
+      quantities: [
+        {
+          name: "Panel",
+          quantity: boq.quantities.panel,
+          rate: formatINRForPdf(boq.rates.panel),
+          amount: formatINRForPdf(boq.quantities.panel * boq.rates.panel)
+        },
+        {
+          name: "Beam",
+          quantity: boq.quantities.beam,
+          rate: formatINRForPdf(boq.rates.beam),
+          amount: formatINRForPdf(boq.quantities.beam * boq.rates.beam)
+        },
+        {
+          name: "Prop",
+          quantity: boq.quantities.prop,
+          rate: formatINRForPdf(boq.rates.prop),
+          amount: formatINRForPdf(boq.quantities.prop * boq.rates.prop)
+        },
+        {
+          name: "Deck",
+          quantity: boq.quantities.deck,
+          rate: formatINRForPdf(boq.rates.deck),
+          amount: formatINRForPdf(boq.quantities.deck * boq.rates.deck)
+        }
+      ]
+    };
 
-    downloadSimplePdf(`createch-boq-${Date.now()}.pdf`, lines);
+    downloadExecutivePdf(`createch-boq-${Date.now()}.pdf`, pdfReport);
     setState((prev) => ({ ...prev, exportCelebration: true }));
     setWorkOrderMessage(`PDF downloaded at ${new Date().toLocaleTimeString()}.`);
   }
 
   function exportBoqExcel() {
+    const reportId = `BOQ-${Date.now()}`;
     const rows = [
-      ["Metric", "Value"],
-      ["Site", state.project.site],
-      ["Floors", state.boq.floorCount],
-      ["Slab Area", state.boq.slabArea],
-      ["Cycle Time", state.boq.cycleDays],
-      ["Manual Total", boq.manualTotal],
-      ["AI Optimized Total", boq.optimizedTotal],
-      ["Savings", boq.savings],
-      [],
-      ["Component", "Quantity", "Rate", "Amount"],
-      ["Panel", boq.quantities.panel, boq.rates.panel, boq.quantities.panel * boq.rates.panel],
-      ["Beam", boq.quantities.beam, boq.rates.beam, boq.quantities.beam * boq.rates.beam],
-      ["Prop", boq.quantities.prop, boq.rates.prop, boq.quantities.prop * boq.rates.prop],
-      ["Deck", boq.quantities.deck, boq.rates.deck, boq.quantities.deck * boq.rates.deck]
+      { type: "data", className: "title", cells: ["L&T Construction - Executive BoQ Export", "", "", ""] },
+      { type: "data", className: "meta", cells: ["Generated At", new Date().toLocaleString(), "", ""] },
+      { type: "data", className: "meta", cells: ["Report ID", reportId, "", ""] },
+      { type: "data", className: "empty", cells: ["", "", "", ""] },
+      { type: "data", className: "section", cells: ["Project Summary", "", "", ""] },
+      { type: "header", cells: ["Metric", "Value", "", ""] },
+      { type: "data", cells: ["Site", appliedProject.site, "", ""] },
+      { type: "data", cells: ["Floors", appliedBoq.floorCount, "", ""] },
+      { type: "data", cells: ["Slab Area (sq m)", appliedBoq.slabArea, "", ""] },
+      { type: "data", cells: ["Cycle Time (days)", appliedBoq.cycleDays, "", ""] },
+      { type: "data", className: "empty", cells: ["", "", "", ""] },
+      { type: "data", className: "section", cells: ["BoQ Totals", "", "", ""] },
+      { type: "header", cells: ["Metric", "Amount (INR)", "", ""] },
+      { type: "data", cells: ["Manual Total", formatINRForPdf(boq.manualTotal), "", ""] },
+      { type: "data", cells: ["AI Optimized Total", formatINRForPdf(boq.optimizedTotal), "", ""] },
+      { type: "data", cells: ["Savings", formatINRForPdf(boq.savings), "", ""] },
+      { type: "data", className: "empty", cells: ["", "", "", ""] },
+      { type: "data", className: "section", cells: ["Quantities and Cost Detail", "", "", ""] },
+      { type: "header", cells: ["Component", "Quantity", "Rate (INR)", "Amount (INR)"] },
+      { type: "data", cells: ["Panel", boq.quantities.panel, formatINRForPdf(boq.rates.panel), formatINRForPdf(boq.quantities.panel * boq.rates.panel)] },
+      { type: "data", cells: ["Beam", boq.quantities.beam, formatINRForPdf(boq.rates.beam), formatINRForPdf(boq.quantities.beam * boq.rates.beam)] },
+      { type: "data", cells: ["Prop", boq.quantities.prop, formatINRForPdf(boq.rates.prop), formatINRForPdf(boq.quantities.prop * boq.rates.prop)] },
+      { type: "data", cells: ["Deck", boq.quantities.deck, formatINRForPdf(boq.rates.deck), formatINRForPdf(boq.quantities.deck * boq.rates.deck)] }
     ];
 
-    downloadCsv(`createch-boq-${Date.now()}.csv`, rows);
+    downloadStyledExcel(`createch-boq-${Date.now()}.xls`, { rows });
     setState((prev) => ({ ...prev, exportCelebration: true }));
-    setWorkOrderMessage(`Excel CSV downloaded at ${new Date().toLocaleTimeString()}.`);
+    setWorkOrderMessage(`Excel report downloaded at ${new Date().toLocaleTimeString()}.`);
   }
 
   const breadcrumb = `${state.profileRole} / ${navItems.find((item) => item.id === state.page)?.label || "Dashboard"}`;
@@ -657,60 +838,72 @@ export default function EnterpriseApp({ session, onLogout }) {
         </nav>
       </aside>
 
-      <div className={`workspace ${notifOpen ? "notif-open" : ""}`}>
-        <header className="top-head glass">
-          <div>
-            <p className="crumb">{breadcrumb}</p>
-            <h1>{t.enterpriseTitle}</h1>
-          </div>
-          <div className="head-actions">
-            <select value={state.language} onChange={(e) => setState((prev) => ({ ...prev, language: e.target.value }))}>
-              <option value="en">English</option>
-              <option value="hi">Hindi</option>
-              <option value="mr">Marathi</option>
-              <option value="ta">Tamil</option>
-            </select>
-            <button type="button" onClick={() => setState((prev) => ({ ...prev, theme: prev.theme === "dark" ? "light" : "dark" }))}>
-              {state.theme === "dark" ? t.lightMode : t.darkMode}
-            </button>
-            <button type="button" className="notify-btn" onClick={() => setNotifOpen((prev) => !prev)}>
-              {t.notifications} ({notifications.length})
-            </button>
-            <button type="button" onClick={onLogout}>{t.logout}</button>
-          </div>
-          {notifOpen ? (
-            <div className="notification-pop glass">
-              {notifications.map((note) => (
-                <div key={note.title} className={`note ${note.kind}`}>{note.title}</div>
-              ))}
+      <div className={`workspace ${state.page === "dashboard" && notifOpen ? "notif-open" : ""}`}>
+        {state.page === "dashboard" ? (
+          <header className="top-head glass">
+            <div>
+              <p className="crumb">{breadcrumb}</p>
+              <h1>{t.enterpriseTitle}</h1>
             </div>
-          ) : null}
-        </header>
+            <div className="head-actions">
+              <select value={state.language} onChange={(e) => setState((prev) => ({ ...prev, language: e.target.value }))}>
+                <option value="en">English</option>
+                <option value="hi">Hindi</option>
+                <option value="mr">Marathi</option>
+                <option value="ta">Tamil</option>
+              </select>
+              <button
+                type="button"
+                className={`theme-switch ${state.theme === "light" ? "on" : "off"}`}
+                onClick={() => setState((prev) => ({ ...prev, theme: prev.theme === "dark" ? "light" : "dark" }))}
+                aria-label={state.theme === "dark" ? t.lightMode : t.darkMode}
+              >
+                <span className="theme-icon" aria-hidden="true">{state.theme === "dark" ? "🌙" : "☀️"}</span>
+                <span className="theme-knob" aria-hidden="true" />
+                <span className="sr-only">{state.theme === "dark" ? t.lightMode : t.darkMode}</span>
+              </button>
+              <button type="button" className="notify-btn" onClick={() => setNotifOpen((prev) => !prev)}>
+                {t.notifications} ({notifications.length})
+              </button>
+              <button type="button" onClick={onLogout}>{t.logout}</button>
+            </div>
+            {notifOpen ? (
+              <div className="notification-pop glass">
+                {notifications.map((note) => (
+                  <div key={note.title} className={`note ${note.kind}`}>{note.title}</div>
+                ))}
+              </div>
+            ) : null}
+          </header>
+        ) : null}
 
-        {notifOpen ? <button type="button" className="notif-overlay" aria-label="Close notifications" onClick={() => setNotifOpen(false)} /> : null}
+        {state.page === "dashboard" && notifOpen ? <button type="button" className="notif-overlay" aria-label="Close notifications" onClick={() => setNotifOpen(false)} /> : null}
 
-        <section className="kpi-row">
-          <div className="glass kpi-card">
-            <p>{t.totalCostSaved}</p>
-            <strong>{metrics.costSaved}</strong>
-            <span className="spark up" />
-          </div>
-          <div className="glass kpi-card">
-            <p>{t.co2Reduction}</p>
-            <strong>{metrics.co2}</strong>
-            <span className="spark up" />
-          </div>
-          <div className="glass kpi-card">
-            <p>{t.inventoryUtilization}</p>
-            <strong>{metrics.utilization}</strong>
-            <span className="spark flat" />
-          </div>
-          <div className="glass kpi-card">
-            <p>{t.logisticsEfficiency}</p>
-            <strong>{metrics.logistics}</strong>
-            <span className="spark up" />
-          </div>
-        </section>
+        {state.page === "setup" ? (
+          <section className="kpi-row">
+            <div className="glass kpi-card">
+              <p>Total Cost (BoQ Model)</p>
+              <strong>{metrics.totalCost}</strong>
+              <small>{t.totalCostSaved} (Optimized vs Baseline): {metrics.costSaved}</small>
+              <span className="spark up" />
+            </div>
+            <div className="glass kpi-card">
+              <p>{t.co2Reduction}</p>
+              <strong>{metrics.co2}</strong>
+              <span className="spark up" />
+            </div>
+            <div className="glass kpi-card">
+              <p>{t.inventoryUtilization}</p>
+              <strong>{metrics.utilization}</strong>
+              <span className="spark flat" />
+            </div>
+            <div className="glass kpi-card">
+              <p>{t.logisticsEfficiency}</p>
+              <strong>{metrics.logistics}</strong>
+              <span className="spark up" />
+            </div>
+          </section>
+        ) : null}
 
         <main className="page-area">
           {state.page === "dashboard" ? (
@@ -718,7 +911,7 @@ export default function EnterpriseApp({ session, onLogout }) {
           ) : null}
 
           {state.page === "setup" ? (
-            <ProjectSetupPage state={state} logistics={logistics} logisticsCosts={logisticsCosts} onProjectChange={updateProject} onBoqChange={updateBoq} onBlueprintUpload={onBlueprintUpload} lockConfig={() => setState((prev) => ({ ...prev, project: { ...prev.project, locked: true } }))} t={t} />
+            <ProjectSetupPage state={state} onProjectChange={updateProject} onBoqChange={updateBoq} onBlueprintUpload={onBlueprintUpload} lockConfig={applyConfig} t={t} />
           ) : null}
 
           {state.page === "analytics" ? (
@@ -730,22 +923,22 @@ export default function EnterpriseApp({ session, onLogout }) {
           ) : null}
         </main>
 
-        <section className="glass insight-box">
-          <h3>AI Insights</h3>
-          <p>{state.workOrderMessage || "Recommendations appear here after analytics, voice command, or export actions."}</p>
-          <p className="erp">ERP Integration: SAP connector placeholder ready.</p>
-        </section>
+        <footer className="app-footer">
+          <p>Contact Us: <a href="tel:+919508426145">9508426145</a> | <a href="mailto:vishaljha9905@gmail.com">vishaljha9905@gmail.com</a></p>
+          <p>All rights reserved @ LT construction</p>
+        </footer>
       </div>
     </div>
   );
 }
 
 function DashboardPage({ session, state, logistics, logisticsCosts, onVoiceChange, onRunVoice, t }) {
+  const appliedProject = state.appliedProject || state.project;
   return (
     <div className="grid-two fade-in">
       <article className="glass panel">
         <h3>{t.welcome}, {session.name}</h3>
-        <p>{state.project.site} site is configured with {state.project.floors} floors and {state.project.targetReuse} reuse cycles.</p>
+        <p>{appliedProject.site} site is configured with {appliedProject.floors} floors and {appliedProject.targetReuse} reuse cycles.</p>
         <div className="mini-bars">
           <div style={{ width: "75%" }} />
           <div style={{ width: "58%" }} />
@@ -785,17 +978,37 @@ function DashboardPage({ session, state, logistics, logisticsCosts, onVoiceChang
   );
 }
 
-function ProjectSetupPage({ state, logistics, logisticsCosts, onProjectChange, onBoqChange, onBlueprintUpload, lockConfig, t }) {
-  const slabArea = asNumber(state.boq.slabArea, 100);
-  const floors = asNumber(state.boq.floorCount, 1);
+function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUpload, lockConfig, t }) {
+  const appliedProject = state.appliedProject || state.project;
+  const appliedBoq = state.appliedBoq || state.boq;
+  const slabArea = asNumber(appliedBoq.slabArea, 0);
+  const floors = asNumber(appliedBoq.floorCount, 0);
   const maxHeight = 160;
+  const selectIfZero = (event) => {
+    if (String(event.target.value) === "0") {
+      event.target.select();
+    }
+  };
+
+  const normalizeNumber = (event) => {
+    const normalized = asNumber(event.target.value, 0);
+    event.target.value = String(normalized);
+    return normalized;
+  };
 
   const oldCost = slabArea * floors * 460;
-  const standardizationGain = Math.min(0.14, asNumber(state.boq.standardization, 0) / 1000);
-  const reuseGain = Math.min(0.1, asNumber(state.project.targetReuse, 1) / 250);
-  const wastagePenalty = Math.min(0.08, asNumber(state.boq.wastage, 0) / 300);
+  const standardizationGain = Math.min(0.14, asNumber(appliedBoq.standardization, 0) / 1000);
+  const reuseGain = Math.min(0.1, asNumber(appliedProject.targetReuse, 0) / 250);
+  const wastagePenalty = Math.min(0.08, asNumber(appliedBoq.wastage, 0) / 300);
   const aiReduction = Math.max(0.06, Math.min(0.35, 0.12 + standardizationGain + reuseGain - wastagePenalty));
   const optimized = oldCost * (1 - aiReduction);
+  const chartMax = Math.max(oldCost, optimized, 1);
+  const savingsValue = Math.max(0, oldCost - optimized);
+  const savingsPercent = oldCost > 0 ? (savingsValue / oldCost) * 100 : 0;
+  const compareSeries = [
+    { key: "old", label: t.old, value: oldCost, barClass: "old" },
+    { key: "ai", label: t.ai, value: optimized, barClass: "ai" }
+  ];
 
   return (
     <div className="grid-two fade-in">
@@ -812,26 +1025,24 @@ function ProjectSetupPage({ state, logistics, logisticsCosts, onProjectChange, o
         </label>
         <label>
           {t.floors}
-          <input type="number" value={state.project.floors} onChange={(e) => {
-            const value = asNumber(e.target.value, 1);
+          <input type="number" value={state.project.floors} onFocus={selectIfZero} onChange={(e) => {
+            const value = normalizeNumber(e);
             onProjectChange("floors", value);
             onBoqChange("floorCount", value);
           }} />
         </label>
         <label>
           {t.areaPerFloor}
-          <input type="number" value={state.project.areaPerFloor} onChange={(e) => {
-            const value = asNumber(e.target.value, 100);
+          <input type="number" value={state.project.areaPerFloor} onFocus={selectIfZero} onChange={(e) => {
+            const value = normalizeNumber(e);
             onProjectChange("areaPerFloor", value);
             onBoqChange("slabArea", value);
           }} />
         </label>
         <label>
           {t.targetReuse}: {state.project.targetReuse}
-          <input type="range" min="1" max="25" value={state.project.targetReuse} onChange={(e) => onProjectChange("targetReuse", asNumber(e.target.value, 1))} />
+          <input type="range" min="0" max="25" value={state.project.targetReuse} onChange={(e) => onProjectChange("targetReuse", asNumber(e.target.value, 0))} />
         </label>
-        <button type="button" onClick={lockConfig}>{t.save}</button>
-        {state.project.locked ? <small className="ok">{t.configLocked}</small> : null}
       </article>
 
       <article className="glass panel">
@@ -842,49 +1053,39 @@ function ProjectSetupPage({ state, logistics, logisticsCosts, onProjectChange, o
         </div>
         <label>
           {t.slabAreaPerFloor}
-          <input type="number" value={state.boq.slabArea} onChange={(e) => onBoqChange("slabArea", asNumber(e.target.value, 100))} />
-        </label>
-        <label>
-          {t.numberOfFloors}
-          <input type="number" value={state.boq.floorCount} onChange={(e) => onBoqChange("floorCount", asNumber(e.target.value, 1))} />
+          <input type="number" value={state.boq.slabArea} onFocus={selectIfZero} onChange={(e) => onBoqChange("slabArea", normalizeNumber(e))} />
         </label>
         <label>
           {t.typicalCycleTime}
-          <input type="number" value={state.boq.cycleDays} onChange={(e) => onBoqChange("cycleDays", asNumber(e.target.value, 1))} />
+          <input type="number" value={state.boq.cycleDays} onFocus={selectIfZero} onChange={(e) => onBoqChange("cycleDays", normalizeNumber(e))} />
         </label>
         <label>
           {t.standardization}
-          <input type="number" min="0" max="100" value={state.boq.standardization} onChange={(e) => onBoqChange("standardization", asNumber(e.target.value, 0))} />
+          <input type="number" min="0" max="100" value={state.boq.standardization} onFocus={selectIfZero} onChange={(e) => onBoqChange("standardization", normalizeNumber(e))} />
         </label>
         <label>
           {t.wastageAllowance}
-          <input type="number" min="0" max="40" value={state.boq.wastage} onChange={(e) => onBoqChange("wastage", asNumber(e.target.value, 0))} />
+          <input type="number" min="0" max="40" value={state.boq.wastage} onFocus={selectIfZero} onChange={(e) => onBoqChange("wastage", normalizeNumber(e))} />
         </label>
+        <button type="button" className="save-config-btn" onClick={lockConfig}>{t.save}</button>
+        {state.project.locked ? <small className="ok">{t.configLocked}</small> : null}
       </article>
 
       <article className="glass panel">
-        <h3>{t.logisticsIntelligence}</h3>
-        <p>{logistics.warehouse}</p>
-        <p>{logistics.distance} km from site</p>
-        <p>{logistics.transfer}</p>
-        <div className="map-box">Map placeholder: Google Maps route optimization integration point</div>
-        <small>Transport: {formatINR(logisticsCosts.transport)} | Fuel: {formatINR(logisticsCosts.fuel)} | Delay Penalty: {formatINR(logisticsCosts.delayPenalty)}</small>
-      </article>
-
-      <article className="glass panel">
-        <h3>{t.financialImpact}</h3>
-        <div className="compare-chart">
-          <div>
-            <span>{t.old}</span>
-            <i style={{ height: `${oldCost > 0 ? maxHeight : 0}px` }} />
-            <b>{formatINR(oldCost)}</b>
-          </div>
-          <div>
-            <span>{t.ai}</span>
-            <i style={{ height: `${oldCost > 0 ? (optimized / oldCost) * maxHeight : 0}px` }} />
-            <b>{formatINR(optimized)}</b>
-          </div>
+        <div className="compare-head">
+          <h3>{t.financialImpact}</h3>
+          <small className="compare-total">Total Cost (Preview Model): {formatINR(optimized)}</small>
         </div>
+        <div className="compare-chart">
+          {compareSeries.map((point) => (
+            <div key={point.key} className="compare-col">
+              <span>{point.label}</span>
+              <i className={point.barClass} style={{ height: `${(point.value / chartMax) * maxHeight}px` }} />
+              <b>{formatINR(point.value)}</b>
+            </div>
+          ))}
+        </div>
+        <small className="compare-meta">Latest saved preview-model delta: {formatINR(savingsValue)} ({savingsPercent.toFixed(1)}%)</small>
       </article>
 
       <article className="glass panel">
@@ -898,10 +1099,102 @@ function ProjectSetupPage({ state, logistics, logisticsCosts, onProjectChange, o
 }
 
 function AnalyticsPage({ boq, logistics, state, setWorkOrderMessage, t }) {
+  const appliedProject = state.appliedProject || state.project;
+  const appliedBoq = state.appliedBoq || state.boq;
   const manual = boq.manualTotal;
   const optimized = boq.optimizedTotal;
-  const wasteAvoided = Math.min(68, Math.max(18, Math.round(asNumber(state.boq.standardization, 0) * 0.6)));
-  const failureProbability = Math.min(45, Math.max(8, 36 - asNumber(state.project.targetReuse, 1)));
+  const wasteAvoided = Math.min(68, Math.max(18, Math.round(asNumber(appliedBoq.standardization, 0) * 0.6)));
+  const failureProbability = Math.min(45, Math.max(8, 36 - asNumber(appliedProject.targetReuse, 0)));
+  const baseDemandForecast = Math.max(5, Math.round(appliedBoq.slabArea / 500));
+  const baseCostRisk = Math.max(7, Math.round(appliedBoq.wastage * 1.7));
+  const [simulatedForecast, setSimulatedForecast] = useState(null);
+
+  useEffect(() => {
+    setSimulatedForecast(null);
+  }, [appliedBoq.slabArea, appliedBoq.wastage, appliedProject.targetReuse]);
+
+  function runForecastSimulation() {
+    const jitter = () => Math.round((Math.random() * 2 - 1) * 6);
+    const demand = Math.max(1, baseDemandForecast + jitter());
+    const costRisk = Math.max(1, baseCostRisk + jitter());
+    const failure = Math.min(95, Math.max(1, failureProbability + jitter()));
+    setSimulatedForecast({ demand, costRisk, failure });
+    setWorkOrderMessage(
+      `Forecast simulation complete: Demand +${demand}%, Cost Risk ${costRisk}%, Failure ${failure}%.`
+    );
+  }
+
+  const shownDemand = simulatedForecast?.demand ?? baseDemandForecast;
+  const shownCostRisk = simulatedForecast?.costRisk ?? baseCostRisk;
+  const shownFailure = simulatedForecast?.failure ?? failureProbability;
+  const historicalBenchmark = useMemo(() => {
+    const cycleDays = asNumber(appliedBoq.cycleDays, 0);
+    const standardization = asNumber(appliedBoq.standardization, 0);
+    const wastage = asNumber(appliedBoq.wastage, 0);
+    const reuse = asNumber(appliedProject.targetReuse, 0);
+    const savingsPct = manual > 0 ? ((manual - optimized) / manual) * 100 : 0;
+
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const historicalAvg = clamp(48 + standardization * 0.22 + reuse * 0.55 - wastage * 0.45 - cycleDays * 1.05, 20, 92);
+    const currentPerf = clamp(historicalAvg + savingsPct * 0.75 + (100 - failureProbability) * 0.06, 20, 96);
+    const deltaPct = historicalAvg > 0 ? ((currentPerf - historicalAvg) / historicalAvg) * 100 : 0;
+    const pointScores = [
+      clamp(historicalAvg - 8, 20, 96),
+      clamp(historicalAvg - 4, 20, 96),
+      clamp(historicalAvg - 1, 20, 96),
+      clamp(historicalAvg + 2, 20, 96),
+      currentPerf
+    ];
+    const xLabels = ["T-4", "T-3", "T-2", "T-1", "Current"];
+
+    return {
+      pointScores,
+      xLabels,
+      deltaPct: Math.abs(deltaPct),
+      isBetter: deltaPct >= 0
+    };
+  }, [
+    appliedBoq.cycleDays,
+    appliedBoq.standardization,
+    appliedBoq.wastage,
+    appliedProject.targetReuse,
+    manual,
+    optimized,
+    failureProbability
+  ]);
+  const historicalPlot = useMemo(() => {
+    const width = 760;
+    const height = 230;
+    const margin = { top: 16, right: 18, bottom: 42, left: 48 };
+    const yMin = 20;
+    const yMax = 100;
+    const xStep = (width - margin.left - margin.right) / (historicalBenchmark.pointScores.length - 1);
+
+    const points = historicalBenchmark.pointScores.map((score, index) => {
+      const x = margin.left + index * xStep;
+      const y = margin.top + ((yMax - score) / (yMax - yMin)) * (height - margin.top - margin.bottom);
+      return {
+        x,
+        y,
+        score: Number(score.toFixed(1)),
+        label: historicalBenchmark.xLabels[index]
+      };
+    });
+
+    const yTicks = [20, 40, 60, 80, 100].map((tick) => ({
+      value: tick,
+      y: margin.top + ((yMax - tick) / (yMax - yMin)) * (height - margin.top - margin.bottom)
+    }));
+
+    return {
+      width,
+      height,
+      margin,
+      points,
+      yTicks,
+      polyline: points.map((point) => `${point.x},${point.y}`).join(" ")
+    };
+  }, [historicalBenchmark]);
 
   return (
     <div className="grid-two fade-in">
@@ -909,7 +1202,7 @@ function AnalyticsPage({ boq, logistics, state, setWorkOrderMessage, t }) {
         <h3>{t.predictiveMetrics}</h3>
         <p>{t.costSavings}: {formatINR(boq.savings)}</p>
         <p>{t.kitUnits}: {Math.round(boq.quantities.panel * 0.11)}</p>
-        <p>CO2 Reduction: {boq.co2} tCO2</p>
+        <p>CO2 Reduction: {boq.co2} metric tons of CO2</p>
         <p>{t.treeEquivalency}: {boq.treeEq} trees</p>
       </article>
 
@@ -933,12 +1226,21 @@ function AnalyticsPage({ boq, logistics, state, setWorkOrderMessage, t }) {
         <h3>{t.wastePrediction}</h3>
         <div className="pie" style={{ "--val": `${wasteAvoided}%` }} />
         <small>{wasteAvoided}% avoided waste by repetition strategy</small>
+        <div className="pie-legend">
+          <span><i className="swatch avoided" /> Avoided waste (repetition strategy)</span>
+          <span><i className="swatch remaining" /> Remaining waste/risk</span>
+        </div>
       </article>
 
       <article className="glass panel">
         <h3>{t.resourceUtilization}</h3>
         <div className="donut" />
-        <small>Purchase 34% | Transfer 29% | Reuse 30% | Loss 7%</small>
+        <div className="util-legend">
+          <span><i className="swatch purchase" /> Purchase: 34%</span>
+          <span><i className="swatch transfer" /> Transfer: 29%</span>
+          <span><i className="swatch reuse" /> Reuse: 30%</span>
+          <span><i className="swatch loss" /> Loss: 7%</span>
+        </div>
       </article>
 
       <article className="glass panel wide">
@@ -953,22 +1255,57 @@ function AnalyticsPage({ boq, logistics, state, setWorkOrderMessage, t }) {
 
       <article className="glass panel">
         <h3>{t.mlPrediction}</h3>
-        <p>Material Demand Forecast (next 2 cycles): +{Math.max(5, Math.round(state.boq.slabArea / 500))}%</p>
-        <p>Cost Fluctuation Risk: {Math.max(7, Math.round(state.boq.wastage * 1.7))}%</p>
-        <p>Failure Probability: {failureProbability}%</p>
-        <button type="button" onClick={() => setWorkOrderMessage("ML forecast shared to planning and procurement teams.")}>{t.simulateForecast}</button>
+        <p>Material Demand Forecast (next 2 cycles): +{shownDemand}%</p>
+        <p>Cost Fluctuation Risk: {shownCostRisk}%</p>
+        <p>Failure Probability: {shownFailure}%</p>
+        <button type="button" onClick={runForecastSimulation}>{t.simulateForecast}</button>
+        <small>{simulatedForecast ? "Showing latest simulated scenario values." : "Shows baseline forecast from current saved configuration."}</small>
       </article>
 
       <article className="glass panel wide">
         <h3>{t.historicalBenchmarking}</h3>
-        <div className="line-chart">
-          <span style={{ left: "8%", top: "68%" }} />
-          <span style={{ left: "28%", top: "52%" }} />
-          <span style={{ left: "48%", top: "46%" }} />
-          <span style={{ left: "68%", top: "34%" }} />
-          <span style={{ left: "88%", top: "30%" }} />
+        <div className="line-chart benchmark-chart">
+          <svg viewBox={`0 0 ${historicalPlot.width} ${historicalPlot.height}`} aria-label="Historical benchmarking coordinate chart">
+            {historicalPlot.yTicks.map((tick) => (
+              <g key={`y-tick-${tick.value}`}>
+                <line
+                  x1={historicalPlot.margin.left}
+                  y1={tick.y}
+                  x2={historicalPlot.width - historicalPlot.margin.right}
+                  y2={tick.y}
+                  className="grid-line"
+                />
+                <text x={historicalPlot.margin.left - 8} y={tick.y + 4} textAnchor="end" className="axis-tick">{tick.value}</text>
+              </g>
+            ))}
+            <line
+              x1={historicalPlot.margin.left}
+              y1={historicalPlot.margin.top}
+              x2={historicalPlot.margin.left}
+              y2={historicalPlot.height - historicalPlot.margin.bottom}
+              className="axis-line"
+            />
+            <line
+              x1={historicalPlot.margin.left}
+              y1={historicalPlot.height - historicalPlot.margin.bottom}
+              x2={historicalPlot.width - historicalPlot.margin.right}
+              y2={historicalPlot.height - historicalPlot.margin.bottom}
+              className="axis-line"
+            />
+            <polyline points={historicalPlot.polyline} className="trend-line" />
+            {historicalPlot.points.map((point) => (
+              <g key={`history-point-${point.label}`}>
+                <circle cx={point.x} cy={point.y} r="5.5" className="trend-point" />
+                <text x={point.x} y={historicalPlot.height - historicalPlot.margin.bottom + 16} textAnchor="middle" className="axis-tick">{point.label}</text>
+              </g>
+            ))}
+          </svg>
         </div>
-        <small>Current project tracks 14% better than historical average.</small>
+        <small className="benchmark-axis">X (Independent): Benchmark Period (T-4 to Current) | Y (Dependent): Performance Index (%)</small>
+        <small>
+          Current project tracks {historicalBenchmark.deltaPct.toFixed(1)}%{" "}
+          {historicalBenchmark.isBetter ? "better" : "below"} than historical average.
+        </small>
       </article>
     </div>
   );
@@ -1022,9 +1359,9 @@ function HealthPage({ panelGroups, onDropPanel, setWorkOrderMessage, onExportPdf
       <article className="glass panel">
         <h3>{t.executiveExport}</h3>
         <p>{t.exportDesc}</p>
-        <div className="inline-form">
-          <button type="button" onClick={onExportPdf}>{t.exportPdf}</button>
-          <button type="button" onClick={onExportExcel}>{t.exportExcel}</button>
+        <div className="inline-form export-actions">
+          <button type="button" className="export-btn export-pdf" onClick={onExportPdf}>{t.exportPdf}</button>
+          <button type="button" className="export-btn export-excel" onClick={onExportExcel}>{t.exportExcel}</button>
         </div>
         {exportCelebration ? <div className="balloons" /> : null}
       </article>
