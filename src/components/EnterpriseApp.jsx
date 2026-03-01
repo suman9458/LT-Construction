@@ -331,6 +331,37 @@ const logisticsDb = {
   Ranchi: { warehouse: "Namkum Stockpoint", distance: 14, transfer: "Transfer 95 beams from Jamshedpur" }
 };
 
+const stateCapitals = [
+  "Amaravati",
+  "Itanagar",
+  "Dispur",
+  "Patna",
+  "Raipur",
+  "Panaji",
+  "Gandhinagar",
+  "Chandigarh",
+  "Shimla",
+  "Ranchi",
+  "Bengaluru",
+  "Thiruvananthapuram",
+  "Bhopal",
+  "Mumbai",
+  "Imphal",
+  "Shillong",
+  "Aizawl",
+  "Kohima",
+  "Bhubaneswar",
+  "Chandigarh",
+  "Jaipur",
+  "Gangtok",
+  "Chennai",
+  "Hyderabad",
+  "Agartala",
+  "Lucknow",
+  "Dehradun",
+  "Kolkata"
+];
+
 function formatINR(value) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -644,7 +675,11 @@ export default function EnterpriseApp({ session, onLogout }) {
     };
   }, [appliedBoq]);
 
-  const logistics = logisticsDb[appliedProject.site];
+  const logistics = logisticsDb[appliedProject.site] || {
+    warehouse: `${appliedProject.site} Central Hub`,
+    distance: 20,
+    transfer: `Transfer 120 panels from nearest ${appliedProject.site} yard`
+  };
 
   const logisticsCosts = useMemo(() => {
     const transport = Math.round(logistics.distance * 1800);
@@ -1017,31 +1052,10 @@ function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUplo
         <label>
           {t.siteSelection}
           <select value={state.project.site} onChange={(e) => onProjectChange("site", e.target.value)}>
-            <option>Mumbai</option>
-            <option>Delhi</option>
-            <option>Chennai</option>
-            <option>Ranchi</option>
+            {stateCapitals.map((capital, index) => (
+              <option key={`${capital}-${index}`} value={capital}>{capital}</option>
+            ))}
           </select>
-        </label>
-        <label>
-          {t.floors}
-          <input type="number" value={state.project.floors} onFocus={selectIfZero} onChange={(e) => {
-            const value = normalizeNumber(e);
-            onProjectChange("floors", value);
-            onBoqChange("floorCount", value);
-          }} />
-        </label>
-        <label>
-          {t.areaPerFloor}
-          <input type="number" value={state.project.areaPerFloor} onFocus={selectIfZero} onChange={(e) => {
-            const value = normalizeNumber(e);
-            onProjectChange("areaPerFloor", value);
-            onBoqChange("slabArea", value);
-          }} />
-        </label>
-        <label>
-          {t.targetReuse}: {state.project.targetReuse}
-          <input type="range" min="0" max="25" value={state.project.targetReuse} onChange={(e) => onProjectChange("targetReuse", asNumber(e.target.value, 0))} />
         </label>
       </article>
 
@@ -1054,6 +1068,24 @@ function ProjectSetupPage({ state, onProjectChange, onBoqChange, onBlueprintUplo
         <label>
           {t.slabAreaPerFloor}
           <input type="number" value={state.boq.slabArea} onFocus={selectIfZero} onChange={(e) => onBoqChange("slabArea", normalizeNumber(e))} />
+        </label>
+        <label>
+          {t.numberOfFloors}
+          <input type="number" value={state.boq.floorCount} onFocus={selectIfZero} onChange={(e) => {
+            const value = normalizeNumber(e);
+            onBoqChange("floorCount", value);
+            onProjectChange("floors", value);
+          }} />
+        </label>
+        <label>
+          {t.targetReuse}: {state.project.targetReuse}
+          <input
+            type="range"
+            min="0"
+            max="25"
+            value={state.project.targetReuse}
+            onChange={(e) => onProjectChange("targetReuse", asNumber(e.target.value, 0))}
+          />
         </label>
         <label>
           {t.typicalCycleTime}
